@@ -1,0 +1,90 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: MealPrep - serverless meal planning API
+
+Globals:
+  Function:
+    Runtime: nodejs20.x
+    Timeout: 10
+    MemorySize: 256
+    Environment:
+      Variables:
+        TABLE_NAME: !Ref MealPrepTable
+
+Resources:
+  MealPrepUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: mealprep-users
+      AutoVerifiedAttributes: [email]
+      UsernameAttributes: [email]
+
+  MealPrepUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref MealPrepUserPool
+      ClientName: mealprep-web
+      GenerateSecret: false
+      ExplicitAuthFlows: [ALLOW_USER_SRP_AUTH, ALLOW_REFRESH_TOKEN_AUTH]
+
+  MealPrepTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: MealPrep
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      SSESpecification:
+        SSEEnabled: true
+
+  MealPrepApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      Auth:
+        DefaultAuthorizer: CognitoAuthorizer
+        Authorizers:
+          CognitoAuthorizer:
+            IdentitySource: $request.header.Authorization
+            JwtConfiguration:
+              issuer: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${MealPrepUserPool}
+              audience:
+                - !Ref MealPrepUserPoolClient
+
+  RecipesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dist/recipes/handler.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MealPrepTable
+      Events:
+        List:
+          Type: HttpApi
+          Properties: { ApiId: !Ref MealPrepApi, Method: GET, Path: /recipes }
+        Create:
+          Type: HttpApi
+          Properties: { ApiId: !Ref MealPrepApi, Method: POST, Path: /recipes }
+        Get:
+          Type: HttpApi
+          Properties:
+            { ApiId: !Ref MealPrepApi, Method: GET, Path: /recipes/{recipeId} }
+        Delete:
+          Type: HttpApi
+          Properties:
+            { ApiId: !Ref MealPrepApi, Method: DELETE, Path: /recipes/{recipeId} }
+
+Outputs:
+  ApiUrl:
+    Value: !Sub https://${MealPrepApi}.execute-api.${AWS::Region}.amazonaws.com
+  UserPoolId:
+    Value: !Ref MealPrepUserPool
+  UserPoolClientId:
+    Value: !Ref MealPrepUserPoolClient
